@@ -232,6 +232,15 @@ class ServiceNowClient:
             
     async def get_record(self, table: str, sys_id: str) -> Dict[str, Any]:
         """Get a record by sys_id"""
+        if table == "incident" and sys_id.startswith("INC"):
+            # This is an incident number, not a sys_id
+            logger.warning(f"Attempted to use get_record with incident number instead of sys_id: {sys_id}")
+            logger.warning("Redirecting to get_incident_by_number method")
+            result = await self.get_incident_by_number(sys_id)
+            if result:
+                return {"result": result}
+            else:
+                raise ValueError(f"Incident not found: {sys_id}")
         return await self.request("GET", f"/api/now/table/{table}/{sys_id}")
         
     async def get_records(self, table: str, options: QueryOptions = None) -> Dict[str, Any]:
@@ -361,10 +370,17 @@ class ServiceNowMCP:
         
     async def get_incident(self, number: str) -> str:
         """Get a specific incident by number"""
-        incident = await self.client.get_incident_by_number(number)
-        if incident:
-            return json.dumps({"result": incident}, indent=2)
-        return json.dumps({"result": "Incident not found"})
+        try:
+            # Always use get_incident_by_number to query by incident number, not get_record
+            incident = await self.client.get_incident_by_number(number)
+            if incident:
+                return json.dumps({"result": incident}, indent=2)
+            else:
+                logger.error(f"No incident found with number: {number}")
+                return json.dumps({"error":{"message":"No Record found","detail":"Record doesn't exist or ACL restricts the record retrieval"},"status":"failure"})
+        except Exception as e:
+            logger.error(f"Error getting incident {number}: {str(e)}")
+            return json.dumps({"error":{"message":str(e),"detail":"Error occurred while retrieving the record"},"status":"failure"})
         
     async def list_users(self) -> str:
         """List users in ServiceNow"""
@@ -396,28 +412,73 @@ class ServiceNowMCP:
     
     # Tool handlers
     async def create_incident(self, 
-                     incident: IncidentCreate,
+                     incident,
                      ctx: Context = None) -> str:
         """
         Create a new incident in ServiceNow
         
         Args:
-            incident: The incident details to create
+            incident: The incident details to create - can be either an IncidentCreate object,
+                      a dictionary containing incident fields, or a string with the description
             ctx: Optional context object for progress reporting
         
         Returns:
             JSON response from ServiceNow
         """
-        if ctx:
-            await ctx.info(f"Creating incident: {incident.short_description}")
-            
-        data = incident.dict(exclude_none=True)
-        result = await self.client.create_record("incident", data)
+        # Handle different input types
+        if isinstance(incident, str):
+            # If a string was provided, treat it as the description and generate a short description
+            short_desc = incident[:50] + ('...' if len(incident) > 50 else '')
+            incident_data = {
+                "short_description": short_desc,
+                "description": incident
+            }
+            logger.info(f"Creating incident from string description: {short_desc}")
+        elif isinstance(incident, dict):
+            # Dictionary provided
+            incident_data = incident
+            logger.info(f"Creating incident from dictionary: {incident.get('short_description', 'No short description')}")
+        elif isinstance(incident, IncidentCreate):
+            # IncidentCreate model provided
+            incident_data = incident.dict(exclude_none=True)
+            logger.info(f"Creating incident from IncidentCreate: {incident.short_description}")
+        else:
+            error_message = f"Invalid incident type: {type(incident)}. Expected IncidentCreate, dict, or str."
+            logger.error(error_message)
+            return json.dumps({"error": error_message})
+
+        # Validate that required fields are present
+        if "short_description" not in incident_data and isinstance(incident, dict):
+            if "description" in incident_data:
+                # Auto-generate short description from description
+                desc = incident_data["description"]
+                incident_data["short_description"] = desc[:50] + ('...' if len(desc) > 50 else '')
+            else:
+                incident_data["short_description"] = "Incident created through API"
         
+        if "description" not in incident_data and isinstance(incident, dict):
+            if "short_description" in incident_data:
+                incident_data["description"] = incident_data["short_description"]
+            else:
+                incident_data["description"] = "No description provided"
+    
+        # Log and create the incident
         if ctx:
-            await ctx.info(f"Created incident: {result['result']['number']}")
+            await ctx.info(f"Creating incident: {incident_data.get('short_description', 'No short description')}")
+        
+        try:
+            result = await self.client.create_record("incident", incident_data)
             
-        return json.dumps(result, indent=2)
+            if ctx:
+                await ctx.info(f"Created incident: {result['result']['number']}")
+                
+            return json.dumps(result, indent=2)
+        except Exception as e:
+            error_message = f"Error creating incident: {str(e)}"
+            logger.error(error_message)
+            if ctx:
+                await ctx.error(error_message)
+            return json.dumps({"error": error_message})
         
     async def update_incident(self,
                      number: str,
