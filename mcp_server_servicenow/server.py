@@ -232,6 +232,15 @@ class ServiceNowClient:
             
     async def get_record(self, table: str, sys_id: str) -> Dict[str, Any]:
         """Get a record by sys_id"""
+        if table == "incident" and sys_id.startswith("INC"):
+            # This is an incident number, not a sys_id
+            logger.warning(f"Attempted to use get_record with incident number instead of sys_id: {sys_id}")
+            logger.warning("Redirecting to get_incident_by_number method")
+            result = await self.get_incident_by_number(sys_id)
+            if result:
+                return {"result": result}
+            else:
+                raise ValueError(f"Incident not found: {sys_id}")
         return await self.request("GET", f"/api/now/table/{table}/{sys_id}")
         
     async def get_records(self, table: str, options: QueryOptions = None) -> Dict[str, Any]:
@@ -361,10 +370,17 @@ class ServiceNowMCP:
         
     async def get_incident(self, number: str) -> str:
         """Get a specific incident by number"""
-        incident = await self.client.get_incident_by_number(number)
-        if incident:
-            return json.dumps({"result": incident}, indent=2)
-        return json.dumps({"result": "Incident not found"})
+        try:
+            # Always use get_incident_by_number to query by incident number, not get_record
+            incident = await self.client.get_incident_by_number(number)
+            if incident:
+                return json.dumps({"result": incident}, indent=2)
+            else:
+                logger.error(f"No incident found with number: {number}")
+                return json.dumps({"error":{"message":"No Record found","detail":"Record doesn't exist or ACL restricts the record retrieval"},"status":"failure"})
+        except Exception as e:
+            logger.error(f"Error getting incident {number}: {str(e)}")
+            return json.dumps({"error":{"message":str(e),"detail":"Error occurred while retrieving the record"},"status":"failure"})
         
     async def list_users(self) -> str:
         """List users in ServiceNow"""
