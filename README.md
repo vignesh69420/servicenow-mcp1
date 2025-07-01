@@ -20,6 +20,7 @@ A Model Context Protocol (MCP) server that interfaces with ServiceNow, allowing 
 
 #### Basic Tools
 - `create_incident`: Create a new incident
+- `create_case`: Create a new case in the `sn_customerservice_case` table
 - `update_incident`: Update an existing incident
 - `search_records`: Search for records using text query
 - `get_record`: Get a specific record by sys_id

@@ -115,10 +115,11 @@ class NLPProcessor:
         # Check for state changes
         if re.search(r'\b(working on|in progress|assign)\b', command, re.IGNORECASE):
             updates["state"] = 2  # In Progress
+        elif re.search(r'\b(close|closed)\b', command, re.IGNORECASE):
+            # Explicit close should override any resolve keywords
+            updates["state"] = 7  # Closed
         elif re.search(r'\b(resolve|resolved|fix|fixed)\b', command, re.IGNORECASE):
             updates["state"] = 6  # Resolved
-        elif re.search(r'\b(close|closed)\b', command, re.IGNORECASE):
-            updates["state"] = 7  # Closed
         
         # Extract comments or work notes
         comment_match = re.search(r'(?:saying|comment|note|with comment|with note)(?:s|)\s*:?\s*(.+?)(?:$|\.(?:\s|$))', command, re.IGNORECASE)
