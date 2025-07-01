@@ -87,6 +87,16 @@ class IncidentUpdate(BaseModel):
 
     class Config:
         use_enum_values = True
+
+class CaseCreate(BaseModel):
+    """Model for creating a new customer service case"""
+
+    short_description: str = Field(..., description="A brief description of the case")
+    description: str = Field(..., description="Detailed description of the case")
+    contact: Optional[str] = Field(None, description="The sys_id or name of the contact")
+    account: Optional[str] = Field(None, description="The sys_id or name of the account")
+    case_origin: Optional[str] = Field(None, description="Where the case originated")
+    priority: Optional[str] = Field(None, description="Case priority")
         
 class QueryOptions(BaseModel):
     """Options for querying ServiceNow records"""
@@ -334,6 +344,7 @@ class ServiceNowMCP:
         
         # Register tools
         self.mcp.tool(name="create_incident")(self.create_incident)
+        self.mcp.tool(name="create_case")(self.create_case)
         self.mcp.tool(name="update_incident")(self.update_incident)
         self.mcp.tool(name="search_records")(self.search_records)
         self.mcp.tool(name="get_record")(self.get_record)
@@ -411,7 +422,7 @@ class ServiceNowMCP:
         return json.dumps(result, indent=2)
     
     # Tool handlers
-    async def create_incident(self, 
+    async def create_incident(self,
                      incident,
                      ctx: Context = None) -> str:
         """
@@ -475,6 +486,60 @@ class ServiceNowMCP:
             return json.dumps(result, indent=2)
         except Exception as e:
             error_message = f"Error creating incident: {str(e)}"
+            logger.error(error_message)
+            if ctx:
+                await ctx.error(error_message)
+            return json.dumps({"error": error_message})
+
+    async def create_case(self, case, ctx: Context = None) -> str:
+        """Create a new case in the sn_customerservice_case table"""
+        if isinstance(case, str):
+            short_desc = case[:50] + ("..." if len(case) > 50 else "")
+            case_data = {
+                "short_description": short_desc,
+                "description": case,
+            }
+            logger.info(f"Creating case from string description: {short_desc}")
+        elif isinstance(case, dict):
+            case_data = case
+            logger.info(
+                f"Creating case from dictionary: {case.get('short_description', 'No short description')}"
+            )
+        elif isinstance(case, CaseCreate):
+            case_data = case.dict(exclude_none=True)
+            logger.info(f"Creating case from CaseCreate: {case.short_description}")
+        else:
+            error_message = (
+                f"Invalid case type: {type(case)}. Expected CaseCreate, dict, or str."
+            )
+            logger.error(error_message)
+            return json.dumps({"error": error_message})
+
+        if "short_description" not in case_data and isinstance(case, dict):
+            if "description" in case_data:
+                desc = case_data["description"]
+                case_data["short_description"] = desc[:50] + ("..." if len(desc) > 50 else "")
+            else:
+                case_data["short_description"] = "Case created through API"
+
+        if "description" not in case_data and isinstance(case, dict):
+            if "short_description" in case_data:
+                case_data["description"] = case_data["short_description"]
+            else:
+                case_data["description"] = "No description provided"
+
+        if ctx:
+            await ctx.info(
+                f"Creating case: {case_data.get('short_description', 'No short description')}"
+            )
+
+        try:
+            result = await self.client.create_record("sn_customerservice_case", case_data)
+            if ctx and result.get("result"):
+                await ctx.info(f"Created case: {result['result'].get('number', 'N/A')}")
+            return json.dumps(result, indent=2)
+        except Exception as e:
+            error_message = f"Error creating case: {str(e)}"
             logger.error(error_message)
             if ctx:
                 await ctx.error(error_message)
